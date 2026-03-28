@@ -213,7 +213,14 @@ function buildFinalFourSnapshot(finalFourRound, teams) {
   return games.flatMap(g => ([
     { team: g.home, seed: g.seeds?.[0] ?? null, conference: teams[g.home]?.conference || "" },
     { team: g.away, seed: g.seeds?.[1] ?? null, conference: teams[g.away]?.conference || "" },
-  ])).sort((a, b) => (a.seed ?? 99) - (b.seed ?? 99));
+  ]));
+}
+function buildFinalFourPlacements(finalFourRound, championEntry, runnerUpEntry, teams) {
+  const finalFour = buildFinalFourSnapshot(finalFourRound, teams);
+  if (!championEntry || !runnerUpEntry) return finalFour;
+
+  const remaining = finalFour.filter(entry => entry.team !== championEntry.team && entry.team !== runnerUpEntry.team);
+  return [championEntry, runnerUpEntry, ...remaining];
 }
 function initializeTeams(previousTeams = null) { const teams = {}, conferences = {}; Object.entries(CONFERENCES_DATA).forEach(([cn, conf]) => { conferences[cn] = []; conf.teams.forEach(t => { const priorElo = previousTeams?.[t.name]?.elo; const startingElo = priorElo ?? t.elo; teams[t.name] = { name: t.name, conference: cn, elo: startingElo, startingElo, wins: 0, losses: 0, confWins: 0, confLosses: 0, streak: 0, streakType: null }; conferences[cn].push(t.name); }); }); return { teams, conferences }; }
 
@@ -389,11 +396,18 @@ export default function NCAASimulator() {
 
       if (wd.phase.includes("Championship")) {
         const aw = Object.values(rr.results).flatMap(r => r.winners);
+        const championshipGame = rr.allGames[0];
         if (aw.length === 1) {
-          setChampion(aw[0]);
+          const championEntry = aw[0];
+          setChampion(championEntry);
           const finalFourRound = ncaaRoundResults[ncaaRoundResults.length - 1];
-          if (finalFourRound) {
-            setSeasonHistory(p => [...p, { season: p.length + 1, finalFour: buildFinalFourSnapshot(finalFourRound, teams) }]);
+          if (finalFourRound && championshipGame) {
+            const runnerUpEntry = {
+              team: championshipGame.loser,
+              seed: championshipGame.seeds?.[championshipGame.winner === championshipGame.home ? 1 : 0] ?? null,
+              conference: teams[championshipGame.loser]?.conference || "",
+            };
+            setSeasonHistory(p => [...p, { season: p.length + 1, placements: buildFinalFourPlacements(finalFourRound, championEntry, runnerUpEntry, teams) }]);
           }
         }
       }
@@ -593,7 +607,7 @@ export default function NCAASimulator() {
           )}
         </div>}
 
-        {view === "history" && <div style={S.card}><h3 style={S.cardTitle}>📚 FINAL FOUR HISTORY</h3>{seasonHistory.length === 0 ? <p style={S.emptyText}>No completed seasons yet. Simulate a season to add the first Final Four.</p> : <div style={S.historyTable}><div style={S.historyHeader}><span>Season</span><span>Final Four 1</span><span>Final Four 2</span><span>Final Four 3</span><span>Final Four 4</span></div>{seasonHistory.map(season => <div key={season.season} style={S.historyRow}><span style={S.historySeason}>{season.season}</span>{season.finalFour.map(entry => <div key={`${season.season}-${entry.team}`} style={S.historyCell}><TeamBadge name={entry.team} size={20} /><div style={S.historyCellBody}><span style={S.historyTeam}>{entry.team}</span><span style={S.historyMeta}>{entry.conference}</span></div><span style={S.historySeed}>#{entry.seed}</span></div>)}</div>)}</div>}</div>}
+        {view === "history" && <div style={S.card}><h3 style={S.cardTitle}>📚 FINAL FOUR HISTORY</h3>{seasonHistory.length === 0 ? <p style={S.emptyText}>No completed seasons yet. Simulate a season to add the first Final Four.</p> : <div style={S.historyTable}><div style={S.historyHeader}><span>Season</span><span>🥇 1st</span><span>🥈 2nd</span><span>3rd</span><span>4th</span></div>{seasonHistory.map(season => <div key={season.season} style={S.historyRow}><span style={S.historySeason}>{season.season}</span>{season.placements.map((entry, idx) => <div key={`${season.season}-${entry.team}-${idx}`} style={S.historyCell}>{idx === 0 && <span style={S.historyMedal}>🥇</span>}{idx === 1 && <span style={S.historyMedal}>🥈</span>}<TeamBadge name={entry.team} size={20} /><div style={S.historyCellBody}><span style={S.historyTeam}>{entry.team}</span><span style={S.historyMeta}>{entry.conference}</span></div><span style={S.historySeed}>#{entry.seed}</span></div>)}</div>)}</div>}</div>}
 
         {view === "results" && <div>{weekResults.length === 0 ? <div style={S.card}><p style={S.emptyText}>No games yet. Simulate the first week!</p></div> :
           [...weekResults].reverse().map((wk, i) => <div key={i} style={S.card}><h3 style={S.cardTitle}><span style={{ ...S.phaseBadge, background: PHASE_COLORS[wk.phase] || "#e74c3c" }}>{wk.phase}</span>Wk {wk.week} — {wk.results.length} games{wk.upsets.length > 0 && <span style={S.upsetBadge}>🚨 {wk.upsets.length}</span>}</h3>
@@ -677,6 +691,7 @@ const S = {
   historyRow: { display: "grid", gridTemplateColumns: "70px repeat(4, minmax(0, 1fr))", gap: 8, alignItems: "stretch" },
   historySeason: { display: "flex", alignItems: "center", justifyContent: "center", background: "#111122", border: "1px solid #2a2a4a", borderRadius: 8, color: "#f39c12", fontWeight: 900, fontSize: 14 },
   historyCell: { display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", background: "#0d0d1a", border: "1px solid #222", borderRadius: 8 },
+  historyMedal: { fontSize: 14, lineHeight: 1 },
   historyCellBody: { display: "flex", flexDirection: "column", minWidth: 0, flex: 1, textAlign: "left" },
   historyTeam: { fontSize: 12, fontWeight: 700, color: "#eee", lineHeight: 1.1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   historyMeta: { fontSize: 9, color: "#777", lineHeight: 1.1, textTransform: "uppercase", letterSpacing: 0.6 },
