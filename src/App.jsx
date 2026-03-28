@@ -733,6 +733,19 @@ export default function NCAASimulator() {
 
         {view === "bracket" && <div>{!ncaaBracket ? <div style={S.card}><p style={S.emptyText}>Bracket set after Conference Tournaments (Week 19)</p></div> :
           <div style={S.bracketPage}><h3 style={{ ...S.cardTitle, marginBottom: 16 }}>🎯 NCAA TOURNAMENT BRACKET</h3>
+            <div style={S.bracketFinalsGrid}>
+              <div style={S.bracketFinalsColumn}>
+                <div style={S.bracketFinalsTitle}>Final Four</div>
+                {renderBracketMatch({ teams: [finalFourSeeds[0] || null, finalFourSeeds[1] || null], result: finalFourGames[0] || null }, "final-four-1")}
+                {renderBracketMatch({ teams: [finalFourSeeds[2] || null, finalFourSeeds[3] || null], result: finalFourGames[1] || null }, "final-four-2")}
+              </div>
+              <div style={S.bracketFinalsColumn}>
+                <div style={S.bracketFinalsTitle}>Championship</div>
+                {renderBracketMatch({ teams: [titleTeams[0] || null, titleTeams[1] || null], result: championshipGame }, "championship")}
+                {champion && <div style={S.bracketChampionCard}><div style={S.bracketChampionLabel}>🏆 National Champion</div><div style={S.bracketChampionRow}><TeamBadge name={champion.team} size={24} /><span style={S.bracketChampionName}>{champion.team}</span></div><div style={S.bracketChampionMeta}>#{champion.seed} seed · {gameState.teams[champion.team].conference}</div></div>}
+              </div>
+            </div>
+
             {Object.entries(ncaaBracket.bracket).map(([region, entries]) => {
               const regionRounds = buildRegionRounds(region, entries);
               return (
@@ -753,19 +766,6 @@ export default function NCAASimulator() {
                 </div>
               );
             })}
-
-            <div style={S.bracketFinalsGrid}>
-              <div style={S.bracketFinalsColumn}>
-                <div style={S.bracketFinalsTitle}>Final Four</div>
-                {renderBracketMatch({ teams: [finalFourSeeds[0] || null, finalFourSeeds[1] || null], result: finalFourGames[0] || null }, "final-four-1")}
-                {renderBracketMatch({ teams: [finalFourSeeds[2] || null, finalFourSeeds[3] || null], result: finalFourGames[1] || null }, "final-four-2")}
-              </div>
-              <div style={S.bracketFinalsColumn}>
-                <div style={S.bracketFinalsTitle}>Championship</div>
-                {renderBracketMatch({ teams: [titleTeams[0] || null, titleTeams[1] || null], result: championshipGame }, "championship")}
-                {champion && <div style={S.bracketChampionCard}><div style={S.bracketChampionLabel}>🏆 National Champion</div><div style={S.bracketChampionRow}><TeamBadge name={champion.team} size={24} /><span style={S.bracketChampionName}>{champion.team}</span></div><div style={S.bracketChampionMeta}>#{champion.seed} seed · {gameState.teams[champion.team].conference}</div></div>}
-              </div>
-            </div>
           </div>}</div>}
 
       </div>
