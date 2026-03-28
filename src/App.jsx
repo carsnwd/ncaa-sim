@@ -486,6 +486,118 @@ export default function NCAASimulator() {
     return "0";
   };
 
+  const BRACKET_REGION_ROUNDS = [
+    { label: "Round of 64", resultIndex: 0 },
+    { label: "Round of 32", resultIndex: 1 },
+    { label: "Sweet 16", resultIndex: 2 },
+    { label: "Elite 8", resultIndex: 3 },
+  ];
+  const BRACKET_ROUND_GAPS = [8, 20, 44, 92];
+  const BRACKET_ROUND_OFFSETS = [0, 12, 34, 74];
+
+  const eliminationByTeam = useMemo(() => {
+    const map = {};
+    ncaaRoundResults.forEach((round, roundIndex) => {
+      round.allGames.forEach(game => {
+        if (map[game.loser] == null) map[game.loser] = roundIndex;
+      });
+    });
+    return map;
+  }, [ncaaRoundResults]);
+
+  const getWinnerEntryFromGame = (game) => {
+    if (!game?.winner) return null;
+    const winnerIsHome = game.winner === game.home;
+    return {
+      team: game.winner,
+      seed: game.seeds?.[winnerIsHome ? 0 : 1] ?? null,
+    };
+  };
+
+  const buildRegionRounds = (region, initialEntries) => {
+    const orderedEntries = bracketOrder(initialEntries || []);
+    const firstRoundSimulated = ncaaRoundResults[0]?.results?.[region]?.games || [];
+    const firstRound = [];
+
+    for (let i = 0; i < orderedEntries.length; i += 2) {
+      firstRound.push({
+        teams: [orderedEntries[i] || null, orderedEntries[i + 1] || null],
+        result: firstRoundSimulated[Math.floor(i / 2)] || null,
+      });
+    }
+
+    const rounds = [firstRound];
+    for (let round = 1; round < BRACKET_REGION_ROUNDS.length; round++) {
+      const previous = rounds[round - 1];
+      const roundResults = ncaaRoundResults[round]?.results?.[region]?.games || [];
+      const current = [];
+
+      for (let i = 0; i < Math.ceil(previous.length / 2); i++) {
+        const top = previous[i * 2];
+        const bottom = previous[i * 2 + 1];
+        current.push({
+          teams: [top?.result ? getWinnerEntryFromGame(top.result) : null, bottom?.result ? getWinnerEntryFromGame(bottom.result) : null],
+          result: roundResults[i] || null,
+        });
+      }
+
+      rounds.push(current);
+    }
+
+    return rounds;
+  };
+
+  const getBracketLineData = (game, slotIndex) => {
+    if (game.result) {
+      const isTop = slotIndex === 0;
+      const teamName = isTop ? game.result.home : game.result.away;
+      return {
+        team: teamName,
+        seed: game.result.seeds?.[isTop ? 0 : 1] ?? null,
+        score: isTop ? game.result.homeScore : game.result.awayScore,
+        isWinner: game.result.winner === teamName,
+      };
+    }
+
+    if (game.teams?.[slotIndex]?.team) {
+      return {
+        team: game.teams[slotIndex].team,
+        seed: game.teams[slotIndex].seed ?? null,
+        score: null,
+        isWinner: false,
+      };
+    }
+
+    return null;
+  };
+
+  const renderBracketTeamLine = (game, slotIndex, key) => {
+    const line = getBracketLineData(game, slotIndex);
+    if (!line) return <div key={key} style={S.bracketMatchPlaceholder}>TBD</div>;
+
+    const eliminatedRound = eliminationByTeam[line.team];
+    return (
+      <div key={key} style={{ ...S.bracketMatchTeam, ...(line.isWinner ? S.bracketMatchTeamWinner : {}) }}>
+        <div style={S.bracketMatchTeamLeft}>
+          <span style={S.bracketMatchSeed}>{line.seed != null ? `#${line.seed}` : "--"}</span>
+          <TeamBadge name={line.team} size={18} />
+          <span style={S.bracketMatchTeamName}>{line.team}</span>
+        </div>
+        <div style={S.bracketMatchTeamRight}>
+          {line.score != null && <span style={S.bracketMatchScore}>{line.score}</span>}
+          {!line.isWinner && eliminatedRound != null && <span style={S.bracketLineElim}>R{eliminatedRound + 1}</span>}
+        </div>
+      </div>
+    );
+  };
+
+  const renderBracketMatch = (game, key) => (
+    <div key={key} style={S.bracketMatchCard}>
+      {renderBracketTeamLine(game, 0, `${key}-top`)}
+      {renderBracketTeamLine(game, 1, `${key}-bottom`)}
+    </div>
+  );
+
   const renderConferencePanel = (conferenceName, isPowerView = false) => {
     const standings = getConferenceStandings(gameState, conferenceName);
 
@@ -535,6 +647,10 @@ export default function NCAASimulator() {
     );
   };
   const latestWeek = weekResults.length > 0 ? weekResults[weekResults.length - 1] : null;
+  const finalFourGames = ncaaRoundResults[4]?.results?.["Final Four"]?.games || [];
+  const finalFourSeeds = ncaaRoundResults[3] ? Object.values(ncaaRoundResults[3].results).map(r => r.winners[0]).filter(Boolean) : [];
+  const championshipGame = ncaaRoundResults[5]?.results?.["Championship"]?.games?.[0] || null;
+  const titleTeams = finalFourGames.length === 2 ? [getWinnerEntryFromGame(finalFourGames[0]), getWinnerEntryFromGame(finalFourGames[1])] : [];
 
   if (!gameState) return (
     <div style={S.startScreen}><div style={S.startContent}>
@@ -616,9 +732,40 @@ export default function NCAASimulator() {
           </div>)}</div>}
 
         {view === "bracket" && <div>{!ncaaBracket ? <div style={S.card}><p style={S.emptyText}>Bracket set after Conference Tournaments (Week 19)</p></div> :
-          <div><h3 style={{ ...S.cardTitle, marginBottom: 16 }}>🎯 NCAA TOURNAMENT</h3>
-            {Object.entries(ncaaBracket.bracket).map(([region, entries]) => <div key={region} style={S.card}><h4 style={S.regionTitle}>{region} Region</h4><div style={S.bracketGrid}>{entries.map((e, i) => { let elim = false, rElim = null; ncaaRoundResults.forEach((rd, ri) => { rd.allGames.forEach(g => { if (g.loser === e.team) { elim = true; rElim = ri; } }); }); return <div key={i} style={{ ...S.bracketEntry, opacity: elim ? 0.35 : 1 }}><span style={S.seedNum}>{e.seed}</span><TeamBadge name={e.team} size={20} /><span style={S.bracketTeam}>{e.team}</span><span style={S.bracketRecord}>{gameState.teams[e.team].wins}-{gameState.teams[e.team].losses}</span>{elim && <span style={S.elimTag}>R{rElim + 1}</span>}</div>; })}</div></div>)}
-            {ncaaRoundResults.length > 0 && <div style={S.card}><h4 style={S.regionTitle}>Results</h4>{ncaaRoundResults.map((rd, ri) => <div key={ri} style={{ marginBottom: 16 }}><div style={S.roundLabel}>Round {ri + 1}</div>{rd.allGames.map((g, gi) => <div key={gi} style={S.tourneyGame}>{g.region && <span style={S.regionTag}>{g.region}</span>}<TeamBadge name={g.winner} size={18} /><span style={{ fontWeight: 700, color: "#2ecc71", flex: 1 }}>{g.winner}</span><span style={S.gameScore}>{g.homeScore}-{g.awayScore}</span><span style={{ color: "#e74c3c", flex: 1, textAlign: "right" }}>{g.loser}</span><TeamBadge name={g.loser} size={18} />{g.isUpset && <span style={S.upsetTag}>UPSET!</span>}</div>)}</div>)}</div>}
+          <div style={S.bracketPage}><h3 style={{ ...S.cardTitle, marginBottom: 16 }}>🎯 NCAA TOURNAMENT BRACKET</h3>
+            {Object.entries(ncaaBracket.bracket).map(([region, entries]) => {
+              const regionRounds = buildRegionRounds(region, entries);
+              return (
+                <div key={region} style={S.bracketRegionCard}>
+                  <h4 style={S.regionTitle}>{region} Region</h4>
+                  <div style={S.bracketScroller}>
+                    <div style={S.regionBracket}>
+                      {regionRounds.map((games, roundIndex) => (
+                        <div key={`${region}-round-${roundIndex}`} style={S.bracketRoundColumn}>
+                          <div style={S.bracketRoundTitle}>{BRACKET_REGION_ROUNDS[roundIndex].label}</div>
+                          <div style={{ ...S.bracketRoundGames, gap: BRACKET_ROUND_GAPS[roundIndex], marginTop: BRACKET_ROUND_OFFSETS[roundIndex] }}>
+                            {games.map((game, gameIndex) => renderBracketMatch(game, `${region}-${roundIndex}-${gameIndex}`))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            <div style={S.bracketFinalsGrid}>
+              <div style={S.bracketFinalsColumn}>
+                <div style={S.bracketFinalsTitle}>Final Four</div>
+                {renderBracketMatch({ teams: [finalFourSeeds[0] || null, finalFourSeeds[1] || null], result: finalFourGames[0] || null }, "final-four-1")}
+                {renderBracketMatch({ teams: [finalFourSeeds[2] || null, finalFourSeeds[3] || null], result: finalFourGames[1] || null }, "final-four-2")}
+              </div>
+              <div style={S.bracketFinalsColumn}>
+                <div style={S.bracketFinalsTitle}>Championship</div>
+                {renderBracketMatch({ teams: [titleTeams[0] || null, titleTeams[1] || null], result: championshipGame }, "championship")}
+                {champion && <div style={S.bracketChampionCard}><div style={S.bracketChampionLabel}>🏆 National Champion</div><div style={S.bracketChampionRow}><TeamBadge name={champion.team} size={24} /><span style={S.bracketChampionName}>{champion.team}</span></div><div style={S.bracketChampionMeta}>#{champion.seed} seed · {gameState.teams[champion.team].conference}</div></div>}
+              </div>
+            </div>
           </div>}</div>}
 
       </div>
@@ -707,12 +854,31 @@ const S = {
   gameScore: { fontFamily: "monospace", color: "#666", fontSize: 10, minWidth: 42, textAlign: "center" },
   upsetTag: { background: "#e74c3c", color: "#fff", padding: "1px 4px", borderRadius: 3, fontSize: 8, fontWeight: 700, marginLeft: 2 },
   regionTitle: { margin: "0 0 10px 0", fontSize: 15, fontWeight: 800, color: "#fff", letterSpacing: 1 },
-  bracketGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))", gap: 3 },
-  bracketEntry: { display: "flex", alignItems: "center", gap: 5, padding: "3px 5px", background: "#0d0d1a", borderRadius: 4, fontSize: 11, transition: "opacity 0.3s" },
-  seedNum: { width: 19, height: 19, display: "flex", alignItems: "center", justifyContent: "center", background: "#f39c12", color: "#000", borderRadius: 4, fontWeight: 900, fontSize: 9 },
-  bracketTeam: { flex: 1, fontWeight: 600, color: "#eee", fontSize: 11 },
-  bracketRecord: { fontSize: 9, color: "#888" },
-  elimTag: { fontSize: 8, color: "#e74c3c", fontWeight: 700, padding: "1px 3px", border: "1px solid #e74c3c", borderRadius: 3 },
+  bracketPage: { display: "flex", flexDirection: "column", gap: 12 },
+  bracketRegionCard: { background: "#14142a", border: "1px solid #2a2a4a", borderRadius: 12, padding: 14, marginBottom: 0 },
+  bracketScroller: { overflowX: "auto", paddingBottom: 6 },
+  regionBracket: { display: "flex", gap: 12, minWidth: 760, alignItems: "flex-start" },
+  bracketRoundColumn: { width: 180, flexShrink: 0 },
+  bracketRoundTitle: { fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, fontWeight: 700, marginBottom: 8 },
+  bracketRoundGames: { display: "flex", flexDirection: "column" },
+  bracketMatchCard: { background: "#0f1022", border: "1px solid #272a49", borderRadius: 8, padding: "5px 6px", display: "flex", flexDirection: "column", gap: 4, minHeight: 52 },
+  bracketMatchTeam: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, borderRadius: 5, padding: "3px 4px" },
+  bracketMatchTeamWinner: { background: "rgba(39, 174, 96, 0.16)", border: "1px solid rgba(46, 204, 113, 0.4)" },
+  bracketMatchTeamLeft: { display: "flex", alignItems: "center", gap: 5, minWidth: 0, flex: 1 },
+  bracketMatchTeamRight: { display: "flex", alignItems: "center", gap: 4 },
+  bracketMatchSeed: { fontSize: 9, color: "#f39c12", fontWeight: 800, width: 22, textAlign: "center" },
+  bracketMatchTeamName: { fontSize: 11, color: "#ddd", fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  bracketMatchScore: { fontFamily: "monospace", fontSize: 11, color: "#eee", fontWeight: 800, minWidth: 16, textAlign: "right" },
+  bracketLineElim: { fontSize: 8, color: "#e74c3c", fontWeight: 700, padding: "1px 3px", border: "1px solid #e74c3c", borderRadius: 3 },
+  bracketMatchPlaceholder: { color: "#555", fontSize: 10, borderRadius: 5, padding: "6px 8px", border: "1px dashed #272a49", textTransform: "uppercase", letterSpacing: 0.6, textAlign: "center" },
+  bracketFinalsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 },
+  bracketFinalsColumn: { background: "#14142a", border: "1px solid #2a2a4a", borderRadius: 12, padding: 14, marginBottom: 0 },
+  bracketFinalsTitle: { fontSize: 12, fontWeight: 800, color: "#f39c12", marginBottom: 10, letterSpacing: 0.8, textTransform: "uppercase" },
+  bracketChampionCard: { marginTop: 10, borderRadius: 8, border: "1px solid rgba(243,156,18,0.4)", background: "linear-gradient(135deg,rgba(243,156,18,0.15),rgba(230,126,34,0.15))", padding: "8px 10px" },
+  bracketChampionLabel: { fontSize: 9, fontWeight: 800, color: "#f39c12", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 },
+  bracketChampionRow: { display: "flex", alignItems: "center", gap: 6, marginBottom: 2 },
+  bracketChampionName: { fontSize: 14, fontWeight: 900, color: "#fff" },
+  bracketChampionMeta: { fontSize: 10, color: "#caa56a" },
   roundLabel: { fontSize: 12, fontWeight: 800, color: "#f39c12", letterSpacing: 1, marginBottom: 5, padding: "3px 0", borderBottom: "1px solid #2a2a4a" },
   tourneyGame: { display: "flex", alignItems: "center", gap: 5, padding: "3px 0", fontSize: 11, borderBottom: "1px solid #111" },
   regionTag: { fontSize: 8, color: "#888", background: "#1a1a3e", padding: "1px 4px", borderRadius: 3, fontWeight: 600, minWidth: 44, textAlign: "center" },
