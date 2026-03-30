@@ -222,16 +222,153 @@ function buildFinalFourPlacements(finalFourRound, championEntry, runnerUpEntry, 
   const remaining = finalFour.filter(entry => entry.team !== championEntry.team && entry.team !== runnerUpEntry.team);
   return [championEntry, runnerUpEntry, ...remaining];
 }
-function initializeTeams(previousTeams = null) { const teams = {}, conferences = {}; Object.entries(CONFERENCES_DATA).forEach(([cn, conf]) => { conferences[cn] = []; conf.teams.forEach(t => { const priorElo = previousTeams?.[t.name]?.elo; const startingElo = priorElo ?? t.elo; teams[t.name] = { name: t.name, conference: cn, elo: startingElo, startingElo, wins: 0, losses: 0, confWins: 0, confLosses: 0, streak: 0, streakType: null }; conferences[cn].push(t.name); }); }); return { teams, conferences }; }
+function initializeTeams(previousTeams = null) { const teams = {}, conferences = {}; Object.entries(CONFERENCES_DATA).forEach(([cn, conf]) => { conferences[cn] = []; conf.teams.forEach(t => { const priorElo = previousTeams?.[t.name]?.elo; const startingElo = Math.min(priorElo ?? t.elo, 2000); teams[t.name] = { name: t.name, conference: cn, elo: startingElo, startingElo, wins: 0, losses: 0, confWins: 0, confLosses: 0, streak: 0, streakType: null }; conferences[cn].push(t.name); }); }); return { teams, conferences }; }
 
-function generateSchedule(teams, conferences, rng) { const schedule = [], teamNames = Object.keys(teams); for (let week = 1; week <= 7; week++) { const weekGames = [], scheduled = new Set(), shuffled = [...teamNames].sort(() => rng() - 0.5); for (let i = 0; i < shuffled.length - 1; i++) { if (scheduled.has(shuffled[i])) continue; for (let j = i + 1; j < shuffled.length; j++) { if (scheduled.has(shuffled[j])) continue; if (teams[shuffled[i]].conference === teams[shuffled[j]].conference) continue; const d = Math.abs(teams[shuffled[i]].elo - teams[shuffled[j]].elo); if (week <= 3 && d > 350 && rng() > 0.3) continue; weekGames.push({ home: rng() > 0.5 ? shuffled[i] : shuffled[j], away: rng() > 0.5 ? shuffled[j] : shuffled[i], isConference: false, week }); scheduled.add(shuffled[i]); scheduled.add(shuffled[j]); break; } } if (week <= 4) { const top = teamNames.filter(t => teams[t].elo > 1700 && !scheduled.has(t)).sort(() => rng() - 0.5); for (let i = 0; i < top.length - 1; i += 2) { if (teams[top[i]].conference !== teams[top[i + 1]].conference) weekGames.push({ home: top[i], away: top[i + 1], isConference: false, week }); } } schedule.push({ week, games: weekGames, phase: "Non-Conference" }); } for (let week = 8; week <= 18; week++) { const weekGames = []; Object.entries(conferences).forEach(([cn, ct]) => { const sh = [...ct].sort(() => rng() - 0.5); for (let i = 0; i < sh.length - 1; i += 2)weekGames.push({ home: rng() > 0.5 ? sh[i] : sh[i + 1], away: rng() > 0.5 ? sh[i + 1] : sh[i], isConference: true, week }); }); schedule.push({ week, games: weekGames, phase: "Conference Play" }); } schedule.push({ week: 19, games: [], phase: "Conference Tournaments" }); schedule.push({ week: 20, games: [], phase: "NCAA Tournament - Round of 64" }); schedule.push({ week: 21, games: [], phase: "NCAA Tournament - Round of 32" }); schedule.push({ week: 22, games: [], phase: "NCAA Tournament - Sweet 16" }); schedule.push({ week: 23, games: [], phase: "NCAA Tournament - Elite 8" }); schedule.push({ week: 24, games: [], phase: "NCAA Tournament - Final Four" }); schedule.push({ week: 25, games: [], phase: "NCAA Tournament - Championship" }); return schedule; }
+function generateSchedule(teams, conferences, rng) {
+  const schedule = [];
+  const teamNames = Object.keys(teams);
+  const shuffle = (arr) => [...arr].sort(() => rng() - 0.5);
+
+  const buildRoundRobinRounds = (conferenceTeams) => {
+    const rotation = [...conferenceTeams];
+    if (rotation.length % 2 === 1) rotation.push(null);
+
+    const rounds = [];
+    const totalRounds = rotation.length - 1;
+    for (let round = 0; round < totalRounds; round++) {
+      const games = [];
+      for (let i = 0; i < rotation.length / 2; i++) {
+        const homeSeed = rotation[i];
+        const awaySeed = rotation[rotation.length - 1 - i];
+        if (homeSeed && awaySeed) games.push([homeSeed, awaySeed]);
+      }
+      rounds.push(games);
+
+      const fixed = rotation[0];
+      const rotating = rotation.slice(1);
+      rotating.unshift(rotating.pop());
+      rotation.splice(0, rotation.length, fixed, ...rotating);
+    }
+
+    return rounds;
+  };
+
+  for (let week = 1; week <= 7; week++) {
+    const weekGames = [];
+    const scheduled = new Set();
+    const shuffled = shuffle(teamNames);
+
+    for (const team of shuffled) {
+      if (scheduled.has(team)) continue;
+
+      let candidates = shuffled.filter((other) => {
+        if (other === team || scheduled.has(other)) return false;
+        return teams[other].conference !== teams[team].conference;
+      });
+
+      if (week <= 3) {
+        candidates = candidates.filter((other) => Math.abs(teams[team].elo - teams[other].elo) <= 350);
+      }
+
+      if (candidates.length === 0) continue;
+
+      const ranked = [...candidates].sort((a, b) => Math.abs(teams[team].elo - teams[a].elo) - Math.abs(teams[team].elo - teams[b].elo));
+      const pool = ranked.slice(0, Math.min(4, ranked.length));
+      const opponent = pool[Math.floor(rng() * pool.length)];
+
+      if (!opponent) continue;
+      const home = rng() > 0.5 ? team : opponent;
+      const away = home === team ? opponent : team;
+      weekGames.push({ home, away, isConference: false, week });
+      scheduled.add(team);
+      scheduled.add(opponent);
+    }
+
+    const secondPass = shuffle(teamNames.filter((team) => !scheduled.has(team)));
+    for (const team of secondPass) {
+      if (scheduled.has(team)) continue;
+
+      const opponent = secondPass.find((other) => {
+        if (other === team || scheduled.has(other)) return false;
+        return teams[other].conference !== teams[team].conference;
+      });
+
+      if (!opponent) continue;
+      const home = rng() > 0.5 ? team : opponent;
+      const away = home === team ? opponent : team;
+      weekGames.push({ home, away, isConference: false, week });
+      scheduled.add(team);
+      scheduled.add(opponent);
+    }
+
+    const thirdPass = shuffle(teamNames.filter((team) => !scheduled.has(team)));
+    for (let i = 0; i < thirdPass.length - 1; i += 2) {
+      const teamA = thirdPass[i];
+      const teamB = thirdPass[i + 1];
+      if (!teamA || !teamB) continue;
+
+      const home = rng() > 0.5 ? teamA : teamB;
+      const away = home === teamA ? teamB : teamA;
+      weekGames.push({ home, away, isConference: false, week });
+      scheduled.add(teamA);
+      scheduled.add(teamB);
+    }
+
+    if (week <= 4) {
+      const top = shuffle(teamNames.filter((team) => teams[team].elo > 1700 && !scheduled.has(team)));
+      for (let i = 0; i < top.length - 1; i += 2) {
+        const teamA = top[i];
+        const teamB = top[i + 1];
+        if (teams[teamA].conference !== teams[teamB].conference) {
+          weekGames.push({ home: teamA, away: teamB, isConference: false, week });
+          scheduled.add(teamA);
+          scheduled.add(teamB);
+        }
+      }
+    }
+
+    schedule.push({ week, games: weekGames, phase: "Non-Conference" });
+  }
+
+  const conferenceWeekGames = Array.from({ length: 11 }, () => []);
+  Object.values(conferences).forEach((conferenceTeams) => {
+    const rounds = buildRoundRobinRounds(conferenceTeams);
+    rounds.forEach((roundGames, roundIndex) => {
+      const weekIndex = Math.floor((roundIndex * 11) / rounds.length);
+      conferenceWeekGames[weekIndex].push(...roundGames);
+    });
+  });
+
+  for (let weekIndex = 0; weekIndex < 11; weekIndex++) {
+    const week = 8 + weekIndex;
+    const weekGames = [];
+
+    conferenceWeekGames[weekIndex].forEach(([teamA, teamB]) => {
+      const home = rng() > 0.5 ? teamA : teamB;
+      const away = home === teamA ? teamB : teamA;
+      weekGames.push({ home, away, isConference: true, week });
+    });
+
+    schedule.push({ week, games: weekGames, phase: "Conference Play" });
+  }
+
+  schedule.push({ week: 19, games: [], phase: "Conference Tournaments" });
+  schedule.push({ week: 20, games: [], phase: "NCAA Tournament - Round of 64" });
+  schedule.push({ week: 21, games: [], phase: "NCAA Tournament - Round of 32" });
+  schedule.push({ week: 22, games: [], phase: "NCAA Tournament - Sweet 16" });
+  schedule.push({ week: 23, games: [], phase: "NCAA Tournament - Elite 8" });
+  schedule.push({ week: 24, games: [], phase: "NCAA Tournament - Final Four" });
+  schedule.push({ week: 25, games: [], phase: "NCAA Tournament - Championship" });
+
+  return schedule;
+}
 
 function simulateGame(home, away, teams, rng, confStrength = {}, isNeutral = false) {
   const confDiff = ((confStrength[teams[home].conference] || 0) - (confStrength[teams[away].conference] || 0)) * 0.15;
   const hE = teams[home].elo + (isNeutral ? 0 : HOME_ADVANTAGE) + confDiff, aE = teams[away].elo,
     exp = 1 / (1 + Math.pow(10, (aE - hE) / 400)), r = rng() < exp ? 1 : 0, w = r === 1 ? home : away, l = r === 1 ? away : home;
   const bs = 68 + Math.floor(rng() * 15), mg = Math.floor(Math.abs(rng() * 20 + rng() * 10)), ws = bs + Math.floor(mg / 2), ls = bs - Math.ceil(mg / 2);
-  const ec = Math.round(K_FACTOR * (r - exp)); teams[home].elo += ec; teams[away].elo -= ec; teams[w].wins++; teams[l].losses++;
+  const ec = Math.round(K_FACTOR * (r - exp)); teams[home].elo = Math.min(2000, teams[home].elo + ec); teams[away].elo = Math.min(2000, teams[away].elo - ec); teams[w].wins++; teams[l].losses++;
   if (teams[w].streakType === "W") teams[w].streak++; else { teams[w].streak = 1; teams[w].streakType = "W"; }
   if (teams[l].streakType === "L") teams[l].streak++; else { teams[l].streak = 1; teams[l].streakType = "L"; }
   const isUpset = (w === away && exp > 0.7) || (w === home && exp < 0.3);
