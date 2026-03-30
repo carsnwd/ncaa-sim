@@ -222,7 +222,7 @@ function buildFinalFourPlacements(finalFourRound, championEntry, runnerUpEntry, 
   const remaining = finalFour.filter(entry => entry.team !== championEntry.team && entry.team !== runnerUpEntry.team);
   return [championEntry, runnerUpEntry, ...remaining];
 }
-function initializeTeams(previousTeams = null) { const teams = {}, conferences = {}; Object.entries(CONFERENCES_DATA).forEach(([cn, conf]) => { conferences[cn] = []; conf.teams.forEach(t => { const priorElo = previousTeams?.[t.name]?.elo; const startingElo = Math.min(priorElo ?? t.elo, 2000); teams[t.name] = { name: t.name, conference: cn, elo: startingElo, startingElo, wins: 0, losses: 0, confWins: 0, confLosses: 0, streak: 0, streakType: null }; conferences[cn].push(t.name); }); }); return { teams, conferences }; }
+function initializeTeams(previousTeams = null) { const teams = {}, conferences = {}; Object.entries(CONFERENCES_DATA).forEach(([cn, conf]) => { conferences[cn] = []; conf.teams.forEach(t => { const priorElo = previousTeams?.[t.name]?.elo; const startingElo = Math.min(priorElo ?? t.elo, 2000); teams[t.name] = { name: t.name, conference: cn, elo: startingElo, startingElo, wins: 0, losses: 0, confWins: 0, confLosses: 0, streak: 0, streakType: null, lastOpponent: null, lastScore: null, lastResult: null }; conferences[cn].push(t.name); }); }); return { teams, conferences }; }
 
 function generateSchedule(teams, conferences, rng) {
   const schedule = [];
@@ -368,11 +368,22 @@ function simulateGame(home, away, teams, rng, confStrength = {}, isNeutral = fal
   const hE = teams[home].elo + (isNeutral ? 0 : HOME_ADVANTAGE) + confDiff, aE = teams[away].elo,
     exp = 1 / (1 + Math.pow(10, (aE - hE) / 400)), r = rng() < exp ? 1 : 0, w = r === 1 ? home : away, l = r === 1 ? away : home;
   const bs = 68 + Math.floor(rng() * 15), mg = Math.floor(Math.abs(rng() * 20 + rng() * 10)), ws = bs + Math.floor(mg / 2), ls = bs - Math.ceil(mg / 2);
-  const ec = Math.round(K_FACTOR * (r - exp)); teams[home].elo = Math.min(2000, teams[home].elo + ec); teams[away].elo = Math.min(2000, teams[away].elo - ec); teams[w].wins++; teams[l].losses++;
+  const homeScore = w === home ? ws : ls;
+  const awayScore = w === away ? ws : ls;
+  const ec = Math.round(K_FACTOR * (r - exp));
+  teams[home].elo = Math.min(2000, teams[home].elo + ec);
+  teams[away].elo = Math.min(2000, teams[away].elo - ec);
+  teams[home].lastOpponent = away;
+  teams[home].lastScore = `${homeScore}-${awayScore}`;
+  teams[home].lastResult = r === 1 ? "W" : "L";
+  teams[away].lastOpponent = home;
+  teams[away].lastScore = `${awayScore}-${homeScore}`;
+  teams[away].lastResult = r === 1 ? "L" : "W";
+  teams[w].wins++; teams[l].losses++;
   if (teams[w].streakType === "W") teams[w].streak++; else { teams[w].streak = 1; teams[w].streakType = "W"; }
   if (teams[l].streakType === "L") teams[l].streak++; else { teams[l].streak = 1; teams[l].streakType = "L"; }
   const isUpset = (w === away && exp > 0.7) || (w === home && exp < 0.3);
-  return { home, away, winner: w, loser: l, homeScore: w === home ? ws : ls, awayScore: w === away ? ws : ls, isUpset, upsetMagnitude: w === away ? exp : 1 - exp, eloChange: Math.abs(ec) };
+  return { home, away, winner: w, loser: l, homeScore, awayScore, isUpset, upsetMagnitude: w === away ? exp : 1 - exp, eloChange: Math.abs(ec) };
 }
 function runConferenceTournaments(teams, conferences, rng) {
   const confStrength = getConferenceStrength(teams, conferences);
@@ -623,6 +634,29 @@ export default function NCAASimulator() {
     return "0";
   };
 
+  const getTop25StreakLabel = (team) => {
+    if (!team?.streak || !team?.streakType) return "—";
+    return `${team.streakType}${team.streak}`;
+  };
+
+  const getTop25RecentGameLabel = (team) => {
+    if (!team?.lastOpponent || !team?.lastScore) return "—";
+    return `vs ${team.lastOpponent} ${team.lastScore}`;
+  };
+
+  const getTop25MetaLabel = (team) => {
+    const streak = getTop25StreakLabel(team);
+    const recent = getTop25RecentGameLabel(team);
+    if (streak === "—" && recent === "—") return "—";
+    return `${streak} • ${recent}`;
+  };
+
+  const getTop25MetaColor = (team) => {
+    if (team?.streakType === "W") return "#2ecc71";
+    if (team?.streakType === "L") return "#e74c3c";
+    return "#888";
+  };
+
   const BRACKET_REGION_ROUNDS = [
     { label: "Round of 64", resultIndex: 0 },
     { label: "Round of 32", resultIndex: 1 },
@@ -827,12 +861,13 @@ export default function NCAASimulator() {
             <div style={{ marginTop: 12 }}><div style={S.miniLabel}>🔥 Hottest Teams</div>{Object.values(gameState.teams).filter(t => t.streakType === "W" && t.streak >= 3).sort((a, b) => b.streak - a.streak).slice(0, 5).map(t => <div key={t.name} style={S.streakRow}><TeamBadge name={t.name} size={16} /><span style={{ flex: 1, marginLeft: 4 }}>{t.name}</span><span style={S.streakBadge}>W{t.streak}</span></div>)}</div></div>
         </div>}
 
-        {view === "top25" && <div style={S.card}><h3 style={S.cardTitle}>🏆 TOP 25 RANKINGS</h3><div style={S.rankHeader}><span style={{ width: 28 }}>#</span><span style={{ width: 26 }}></span><span style={{ flex: 1 }}>Team</span><span style={{ width: 45 }}>Conf</span><span style={{ width: 46, textAlign: "center" }}>Rec</span><span style={{ width: 40, textAlign: "center" }}>C</span><span style={{ width: 42, textAlign: "right" }}>Elo</span><span style={{ width: 40, textAlign: "right" }}>Rk</span></div>
+        {view === "top25" && <div style={S.card}><h3 style={S.cardTitle}>🏆 TOP 25 RANKINGS</h3><div style={S.rankHeader}><span style={{ width: 28 }}>#</span><span style={{ width: 26 }}></span><span style={{ flex: 1 }}>Team</span><span style={{ width: 45 }}>Conf</span><span style={{ width: 46, textAlign: "center" }}>Rec</span><span style={{ flex: 1.2 }}>Stk / Last</span><span style={{ width: 40, textAlign: "center" }}>C</span><span style={{ width: 42, textAlign: "right" }}>Elo</span><span style={{ width: 40, textAlign: "right" }}>Rk</span></div>
           {top25.map((t, i) => {
             const rankChange = getTop25RankChange(t.name, i + 1);
             const rankChangeColor = rankChange === "new" ? "#f39c12" : rankChange.startsWith("+") ? "#2ecc71" : rankChange === "0" ? "#666" : "#e74c3c";
+            const metaColor = getTop25MetaColor(t);
 
-            return <div key={t.name} style={{ ...S.rankRowFull, background: i % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent" }}><span style={{ width: 28, fontWeight: 800, color: i < 4 ? "#f1c40f" : "#666", fontSize: i < 4 ? 15 : 12 }}>{i + 1}</span><TeamBadge name={t.name} size={24} /><span style={{ flex: 1, fontWeight: 600, color: "#eee", marginLeft: 5 }}>{t.name}</span><span style={{ width: 45 }}><ConfBadge name={t.conference} size={15} /></span><span style={{ width: 46, textAlign: "center", fontWeight: 700, color: "#eee", fontSize: 12 }}>{t.wins}-{t.losses}</span><span style={{ width: 40, textAlign: "center", fontSize: 10, color: "#999" }}>{t.confWins}-{t.confLosses}</span><span style={{ width: 42, textAlign: "right", fontFamily: "monospace", fontWeight: 700, color: "#4ecdc4", fontSize: 12 }}>{Math.round(t.elo)}</span><span style={{ width: 40, textAlign: "right", fontSize: 11, color: rankChangeColor, fontWeight: 700 }}>{rankChange}</span></div>;
+            return <div key={t.name} style={{ ...S.rankRowFull, background: i % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent" }}><span style={{ width: 28, fontWeight: 800, color: i < 4 ? "#f1c40f" : "#666", fontSize: i < 4 ? 15 : 12 }}>{i + 1}</span><TeamBadge name={t.name} size={24} /><span style={{ flex: 1, fontWeight: 600, color: "#eee", marginLeft: 5 }}>{t.name}</span><span style={{ width: 45 }}><ConfBadge name={t.conference} size={15} /></span><span style={{ width: 46, textAlign: "center", fontWeight: 700, color: "#eee", fontSize: 12 }}>{t.wins}-{t.losses}</span><span style={{ flex: 1.2, minWidth: 0, textAlign: "left", fontSize: 10, color: metaColor, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{getTop25MetaLabel(t)}</span><span style={{ width: 40, textAlign: "center", fontSize: 10, color: "#999" }}>{t.confWins}-{t.confLosses}</span><span style={{ width: 42, textAlign: "right", fontFamily: "monospace", fontWeight: 700, color: "#4ecdc4", fontSize: 12 }}>{Math.round(t.elo)}</span><span style={{ width: 40, textAlign: "right", fontSize: 11, color: rankChangeColor, fontWeight: 700 }}>{rankChange}</span></div>;
           })}
         </div>}
 
@@ -954,6 +989,7 @@ const S = {
   rankElo: { width: 34, textAlign: "right", fontFamily: "monospace", fontWeight: 700, color: "#4ecdc4", fontSize: 10 },
   rankHeader: { display: "flex", alignItems: "center", gap: 5, padding: "5px 0", borderBottom: "1px solid #2a2a4a", fontSize: 9, color: "#555", fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 },
   rankRowFull: { display: "flex", alignItems: "center", gap: 5, padding: "5px 0", borderBottom: "1px solid #1a1a2e", fontSize: 12 },
+  rankMeta: { flex: 1.2, minWidth: 0, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   upsetRow: { display: "flex", alignItems: "center", gap: 5, padding: "3px 0", borderBottom: "1px solid #1a1a2e" },
   score: { fontFamily: "monospace", color: "#888", fontSize: 10, minWidth: 42, textAlign: "center" },
   emptyText: { color: "#555", fontSize: 13, textAlign: "center", padding: 18 },
